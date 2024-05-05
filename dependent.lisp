@@ -372,7 +372,7 @@
   (the short-float (* (the int16 value) #.(coerce (/ pi 180.0 64.0) 'short-float))))
 
 
-#+(or cmu sbcl clisp ecl clasp)
+#+(or cmu sbcl clisp ecl clasp mkcl)
 (progn
 
 ;;; This overrides the (probably incorrect) definition in clx.lisp.  Since PI
@@ -532,7 +532,7 @@
 
 ;;; MAKE-PROCESS-LOCK: Creating a process lock.
 
-#-(or abcl sbcl (and cmu mp) (and ecl threads) (and clasp threads))
+#-(or abcl sbcl (and cmu mp) (and ecl threads) (and clasp threads) mkcl)
 (defun make-process-lock (name)
   (declare (ignore name))
   nil)
@@ -553,6 +553,10 @@
 (defun make-process-lock (name)
   (mp:make-recursive-mutex name))
 
+#+mkcl
+(defun make-process-lock (name)
+  (mt:make-lock :name name :recursive t))
+
 #+abcl
 (defun make-process-lock (name)
   (threads:make-thread-lock))
@@ -565,7 +569,7 @@
 
 ;; If you're not sharing DISPLAY objects within a multi-processing
 ;; shared-memory environment, this is sufficient
-#-(or abcl sbcl (and CMU mp) (and ecl threads) (and clasp threads))
+#-(or abcl sbcl (and CMU mp) (and ecl threads) (and clasp threads) mkcl)
 (defmacro holding-lock ((locator display &optional whostate &key timeout) &body body)
   (declare (ignore locator display whostate timeout))
   `(progn ,@body))
@@ -615,6 +619,16 @@
   `(mp::with-lock (,lock)
       ,@body))
 
+#+mkcl
+(defmacro holding-lock ((lock display
+                         &optional (whostate "CLX wait")
+                         &key timeout) &body body)
+  (declare (ignore display))
+  (declare (ignore whostate))
+  (declare (ignore timeout))
+  `(mt:with-lock (,lock)
+     ,@body))
+
 #+sbcl
 (defmacro holding-lock ((lock display &optional (whostate "CLX wait")
                               &key timeout)
@@ -648,7 +662,7 @@
 ;;; Caller guarantees that PROCESS-WAKEUP will be called after the predicate's
 ;;; value changes.
 
-#-(or (and sb-thread sbcl) (and cmu mp) (and ecl threads) (and clasp threads))
+#-(or (and sb-thread sbcl) (and cmu mp) (and ecl threads) (and clasp threads) mkcl)
 (defun process-block (whostate predicate &rest predicate-args)
   (declare (ignore whostate))
   (or (apply predicate predicate-args)
@@ -696,6 +710,12 @@
      (return))
      (mp:process-yield)))
 
+#+mkcl
+(defun process-block (whostate predicate &rest predicate-args)
+  (declare (ignore whostate) (type function predicate))
+  (loop until (apply predicate predicate-args)
+        do (mt:thread-yield)))
+
 ;;; FIXME: the below implementation for threaded PROCESS-BLOCK using
 ;;; queues and condition variables might seem better, but in fact it
 ;;; turns out to make performance extremely suboptimal, at least as
@@ -731,7 +751,7 @@
 
 (declaim (inline process-wakeup))
 
-#-(or abcl (and sbcl sb-thread) (and cmu mp) (and ecl threads) (and clasp threads))
+#-(or abcl (and sbcl sb-thread) (and cmu mp) (and ecl threads) (and clasp threads) mkcl)
 (defun process-wakeup (process)
   (declare (ignore process))
   nil)
@@ -761,6 +781,11 @@
   (declare (ignore process))
   (mp:process-yield))
 
+#+mkcl
+(defun process-wakeup (process)
+  (declare (ignore process))
+  (mt:thread-yield))
+
 #+(or)
 (defun process-wakeup (process)
   (declare (ignore process))
@@ -779,13 +804,17 @@
 
 ;;; Default return NIL, which is acceptable even if there is a scheduler.
 
-#-(or abcl sbcl (and cmu mp) (and ecl threads) (and clasp threads))
+#-(or abcl sbcl (and cmu mp) (and ecl threads) (and clasp threads) mkcl)
 (defun current-process ()
   nil)
 
 #+(or (and cmu mp) (and ecl threads) (and clasp threads))
 (defun current-process ()
   mp:*current-process*)
+
+#+mkcl
+(defun current-process ()
+  (mt:current-thread))
 
 #+sbcl
 (defun current-process ()
@@ -812,6 +841,10 @@
 #+clasp
 (defmacro without-interrupts (&body body)
   `(mp:without-interrupts ,@body))
+
+#+mkcl
+(defmacro without-interrupts (&body body)
+  `(mt:without-interrupts ,@body))
 
 #+sbcl
 (defvar *without-interrupts-sic-lock*
@@ -882,7 +915,7 @@
 ;;; OPEN-X-STREAM - create a stream for communicating to the appropriate X
 ;;; server
 
-#-(or CMU sbcl ecl clisp clasp)
+#-(or CMU sbcl ecl clisp clasp mkcl)
 (defun open-x-stream (host display protocol)
   host display protocol ;; unused
   (error "OPEN-X-STREAM not implemented yet."))
@@ -909,7 +942,7 @@
               (socket:socket-connect (+ 6000 display) ip
                                      :element-type '(unsigned-byte 8))))))))
 
-#+(or sbcl ecl)
+#+(or sbcl ecl mkcl)
 (defun open-x-stream (host display protocol)
   (declare (ignore protocol)
            (type (integer 0) display))
@@ -992,7 +1025,7 @@
 ;;; :TIMEOUT if it times out, NIL otherwise.
 
 ;;; The default implementation
-#-(or cmu sbcl clisp (and ecl serve-event))
+#-(or cmu sbcl clisp (and ecl serve-event) mkcl)
 (progn
   ;; Issue a warning to incentivize providing better implementation.
   (eval-when (:compile-toplevel :load-toplevel :execute)
@@ -1021,7 +1054,11 @@
                    (return-from buffer-input-wait-default nil)))
                :timeout))))))
 
-#+(and ecl serve-event)
+#+mkcl
+(ffi:defcbody file-stream-fd (t) :int
+  "mkcl_stream_to_handle(env, #0, TRUE)")
+
+#+(or (and ecl serve-event) mkcl)
 (defun buffer-input-wait-default (display timeout)
   (declare (type display display)
            (type (or null number) timeout))
@@ -1033,7 +1070,8 @@
           (T (flet ((usable! (fd)
                       (declare (ignore fd))
                       (return-from buffer-input-wait-default)))
-               (serve-event:with-fd-handler ((ext:file-stream-fd
+               (serve-event:with-fd-handler ((#+mkcl file-stream-fd
+                                              #+ecl ext:file-stream-fd
                                               (typecase stream
                                                 (two-way-stream (two-way-stream-input-stream stream))
                                                 (otherwise stream)))
@@ -1266,7 +1304,7 @@
 ;;  HOST hacking
 ;;-----------------------------------------------------------------------------
 
-#-(or CMU sbcl ecl clisp clasp)
+#-(or CMU sbcl ecl clisp clasp mkcl)
 (defun host-address (host &optional (family :internet))
   ;; Return a list whose car is the family keyword (:internet :DECnet :Chaos)
   ;; and cdr is a list of network address bytes.
@@ -1341,7 +1379,7 @@
 
 ;;#+sbcl
 ;;(require :sockets)
-#+sbcl
+#+(or sbcl mkcl)
 (defun host-address (host &optional (family :internet))
   ;; Return a list whose car is the family keyword (:internet :DECnet :Chaos)
   ;; and cdr is a list of network address bytes.
@@ -1414,15 +1452,16 @@
   #+ecl (si:getenv name)
   #+clisp (ext:getenv name)
   #+clasp (ext:getenv name)
-  #-(or sbcl CMU ecl clisp clasp) (progn name nil))
+  #+mkcl (mkcl:getenv name)
+  #-(or sbcl CMU ecl clisp clasp mkcl) (progn name nil))
 
 (defun get-host-name ()
   "Return the same hostname as gethostname(3) would"
   ;; machine-instance probably works on a lot of lisps, but clisp is not
   ;; one of them
-  #+(or cmu sbcl ecl clasp) (machine-instance)
+  #+(or cmu sbcl ecl clasp mkcl) (machine-instance)
   #+clisp (let ((s (machine-instance))) (subseq s 0 (position #\Space s)))
-  #-(or cmu sbcl ecl clisp clasp) (error "get-host-name not implemented"))
+  #-(or cmu sbcl ecl clisp clasp mkcl) (error "get-host-name not implemented"))
 
 (defun homedir-file-pathname (name)
   (and #-(or unix mach) (search "Unix" (software-type) :test #'char-equal)

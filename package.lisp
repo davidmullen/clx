@@ -20,6 +20,9 @@
 
 (common-lisp:in-package :common-lisp-user)
 
+#+mkcl (require :sockets)
+#+mkcl (require :serve-event)
+
 (defpackage #:xlib
   (:use common-lisp)
   (:size 3000)
@@ -31,7 +34,7 @@
   #+lispm (:import-from lisp char-bit)
   #+lispm (:import-from sys arglist with-stack-list with-stack-list*)
   #+clasp (:shadow arglist)
-  #+(or sbcl ecl clasp) (:use sb-bsd-sockets)
+  #+(or sbcl ecl clasp mkcl) (:use sb-bsd-sockets)
   (:export
     *version* access-control access-error access-hosts
     activate-screen-saver add-access-host add-resource add-to-save-set
